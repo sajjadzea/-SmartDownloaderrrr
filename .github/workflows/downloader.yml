@@ -1,4 +1,4 @@
-name: SmartDownloader - AutoZIP Fallback
+name: SmartDownloader - SecureZIP Mode
 
 on:
   workflow_dispatch:
@@ -10,10 +10,6 @@ on:
         description: 'normal یا zip'
         required: false
         default: 'normal'
-      split:
-        description: 'حجم split بر حسب MB (اختیاری)'
-        required: false
-        default: 'none'
 
 jobs:
   ultra:
@@ -22,83 +18,47 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install download tools
+      - name: Install tools
         run: |
           sudo apt update
           sudo apt install -y curl aria2 zip
 
-      - name: Launch SmartDownloader
+      - name: Prepare workspace
         run: mkdir -p downloads
 
-      - name: Run Ultra logic
+      - name: Smart Download Engine
         run: |
-          echo "🔗 لینک‌ها:"
-          echo "${{ github.event.inputs.urls }}"
-
           URLS="${{ github.event.inputs.urls }}"
-          MODE="${{ github.event.inputs.mode }}"
-          SPLIT="${{ github.event.inputs.split }}"
-
+          echo "🔗 Links: $URLS"
           cd downloads
-
           for LINK in $URLS; do
             echo "⬇️ Downloading: $LINK"
             if [[ "$LINK" =~ "pytorch.org" || "$LINK" =~ "huggingface.co" || "$LINK" =~ "googleusercontent" ]]; then
-              echo "Using curl for CDN-protected link"
               curl -L --retry 10 --retry-delay 10 -O "$LINK"
             else
-              echo "Using aria2c for standard link"
               aria2c -x 16 -s 16 "$LINK"
             fi
-
-            # Check integrity
-            FILE=$(basename "$LINK")
-            if [ ! -f "$FILE" ] || [ ! -s "$FILE" ]; then
-              echo "⚠️ File may be HTML or empty — switching to chunk mode"
-              curl -L --retry 10 --retry-delay 10 --range 0-10485759 -o "${FILE}.part1" "$LINK"
-              curl -L --retry 10 --retry-delay 10 --range 10485760-20971519 -o "${FILE}.part2" "$LINK"
-              cat "${FILE}.part1" "${FILE}.part2" > "${FILE}"
-              rm -f "${FILE}.part1" "${FILE}.part2"
-            fi
           done
-
           cd ..
 
-      - name: Commit & push batches (AutoZIP Fallback)
+      - name: Commit & Push (SecureZIP fallback)
         if: always()
         run: |
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions"
-
-          echo "Check total size before commit:"
-          du -sh downloads
-
+          du -sh downloads || true
           SIZE_MB=$(du -sm downloads | cut -f1)
-          echo "Total MB: $SIZE_MB"
+          echo "Total: ${SIZE_MB}MB"
 
-          # Fallback: AutoZIP if size > 2500 MB or commit fails
-          if [ "$SIZE_MB" -gt 2500 ]; then
-            echo "⚡ AutoZIP fallback triggered (size > 2.5GB)"
-            zip -r downloads_auto.zip downloads
-            rm -rf downloads
-            mkdir downloads
-            mv downloads_auto.zip downloads/
-          fi
-
+          # مرحله‌ی معمول
           git add downloads || true
-          git commit -m "🚀 Auto commit downloaded files" || echo "Nothing to commit"
-          git pull origin main --rebase || echo "No rebase needed"
-
+          git commit -m "🚀 Auto-add downloads" || echo "Nothing to commit"
+          git pull origin main --rebase || echo "No rebase"
           git push origin main || (
-            echo "⚠️ Push failed — trying AutoZIP fallback"
-            zip -r downloads_backup.zip downloads
-            rm -rf downloads
-            mkdir downloads
-            mv downloads_backup.zip downloads/
-            git add downloads
-            git commit -m "🧩 AutoZIP fallback push"
-            git push origin main --force
+            echo "⚠️ Push failed or repo too large — running SecureZIP fallback"
+            mkdir -p /tmp/sdzip
+           ....................................................................................................................................................................................................................................................................................................................................... main --force
           )
 
-      - name: Complete job
-        run: echo "✅ SmartDownloader finished successfully"
+      - name: Finish
+        run: echo "✅ SecureZIP mode run complete."
