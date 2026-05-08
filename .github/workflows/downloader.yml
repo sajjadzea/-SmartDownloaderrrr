@@ -1,174 +1,41 @@
-name: PyTorch Ultra v12.0
+name: SmartDownloader
 
 on:
   workflow_dispatch:
-    inputs:
-      python_ver:
-        description: "Python version"
-        required: true
-        default: "3.11"
-      cuda_ver:
-        description: "CUDA version (cu121/cu118/cpu)"
-        required: true
-        default: "cu121"
-      torch_ver:
-        description: "Torch version"
-        required: true
-        default: "2.2.2"
-
-permissions:
-  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
 
-      - name: Prepare variables
-        id: vars
-        shell: bash
-        run: |
-          PY="${{ github.event.inputs.python_ver }}"
-          TORCH="${{ github.event.inputs.torch_ver }}"
-          CUDA="${{ github.event.inputs.cuda_ver }}"
-          PYTAG="$(echo "$PY" | tr -d '.')"
-          BUILD_ID="${{ github.run_id }}"
-          OUTDIR="dist/${TORCH}-${CUDA}-py${PYTAG}-win_amd64"
+    - name: Download Windows wheels
+      run: |
+        mkdir -p dist
+        pip download torch torchvision torchaudio \
+          --platform win_amd64 \
+          --python-version 311 \
+          --implementation cp \
+          --abi cp311 \
+          --only-binary=:all: \
+          --no-deps \
+          -d dist
 
-          echo "PYTAG=$PYTAG" >> "$GITHUB_OUTPUT"
-          echo "TORCH=$TORCH" >> "$GITHUB_OUTPUT"
-          echo "CUDA=$CUDA" >> "$GITHUB_OUTPUT"
-          echo "OUTDIR=$OUTDIR" >> "$GITHUB_OUTPUT"
+    - name: Zip package
+      run: |
+        cd dist
+        zip -r package.zip *.whl
 
-      - name: Download Windows wheels only
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p wheels
-
-          pip download "torch==${{ github.event.inputs.torch_ver }}" \
-            --index-url "https://download.pytorch.org/whl/${{ github.event.inputs.cuda_ver }}" \
-            --platform win_amd64 \
-            --python-version "${{ steps.vars.outputs.PYTAG }}" \
-            --implementation cp \
-            --abi "cp${{ steps.vars.outputs.PYTAG }}" \
-            --only-binary=:all: \
-            --no-deps \
-            -d wheels
-
-          pip download "torchvision" \
-            --index-url "https://download.pytorch.org/whl/${{ github.event.inputs.cuda_ver }}" \
-            --platform win_amd64 \
-            --python-version "${{ steps.vars.outputs.PYTAG }}" \
-            --implementation cp \
-            --abi "cp${{ steps.vars.outputs.PYTAG }}" \
-            --only-binary=:all: \
-            --no-deps \
-            -d wheels
-
-          pip download "torchaudio" \
-            --index-url "https://download.pytorch.org/whl/${{ github.event.inputs.cuda_ver }}" \
-            --platform win_amd64 \
-            --python-version "${{ steps.vars.outputs.PYTAG }}" \
-            --implementation cp \
-            --abi "cp${{ steps.vars.outputs.PYTAG }}" \
-            --only-binary=:all: \
-            --no-deps \
-            -d wheels
-
-          echo "Downloaded files:"
-          ls -lh wheels
-
-      - name: Build metadata + checksums + zip
-        shell: bash
-        run: |
-          set -euo pipefail
-          OUTDIR="${{ steps.vars.outputs.OUTDIR }}"
-          mkdir -p "$OUTDIR"
-
-          python - <<'PY'
-          import json, hashlib, os, pathlib, shutil, zipfile
-
-          outdir = pathlib.Path("${{ steps.vars.outputs.OUTDIR }}")
-          wheels = pathlib.Path("wheels")
-          outdir.mkdir(parents=True, exist_ok=True)
-
-          meta = []
-          for f in wheels.glob("*.whl"):
-              data = f.read_bytes()
-              sha = hashlib.sha256(data).hexdigest()
-              size = f.stat().st_size
-              meta.append({
-                  "file": f.name,
-                  "sha256": sha,
-                  "size": size
-              })
-              shutil.copy2(f, outdir / f.name)
-
-          (outdir / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-
-          zip_path = outdir / "package.zip"
-          with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-              for f in outdir.iterdir():
-                  if f.name != "package.zip":
-                      zf.write(f, arcname=f.name)
-          PY
-
-      - name: Update index.json
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-
-          OUTDIR="${{ steps.vars.outputs.OUTDIR }}"
-          REL_PATH="${OUTDIR#dist/}"
-
-          cat > dist/index.json <<EOF
-          {
-            "latest": "$REL_PATH",
-            "path": "$OUTDIR",
-            "torch_version": "${{ steps.vars.outputs.TORCH }}",
-            "cuda": "${{ steps.vars.outputs.CUDA }}",
-            "python_tag": "cp${{ steps.vars.outputs.PYTAG }}",
-            "platform": "win_amd64",
-            "files_page": "https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}/$OUTDIR"
-          }
-          EOF
-
-      - name: Commit and push dist
-  shell: bash
-  run: |
-    set -euo pipefail
-
-    git config user.name "github-actions[bot]"
-    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-    # Prevent RPC errors on large commits
-    git config http.postBuffer 157286400
-    git config http.maxRequestBuffer 157286400
-    git config core.compression 0
-    git config pack.window 0
-    git config pack.threads 1
-    git config pack.windowMemory "1m"
-
-    git add dist
-
-    if git diff --cached --quiet; then
-      echo "No changes to commit."
-      exit 0
-    fi
-
-    git commit -m "Add PyTorch wheels: ${{ steps.vars.outputs.TORCH }} / ${{ steps.vars.outputs.CUDA / cp${{ steps.vars.outputs.PYTAG }}"
-    git push --verbose
-
-          EOF
+    - name: Commit files
+      run: |
+        git config user.name github-actions
+        git config user.email actions@github.com
+        git add dist/*
+        git commit -m "update wheels" || echo "no changes"
+        git pull --rebase --autostash origin ${{ github.ref_name }}
+        git push
